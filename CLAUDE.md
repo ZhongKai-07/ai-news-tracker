@@ -97,6 +97,20 @@ npx tsc --noEmit  # Type check only
 - Score accumulation is incremental: reverse log to get raw, add new mention's contribution, re-log
 - Source deletion is soft (status=disabled) to avoid foreign key issues with existing articles
 
+## V2 Data Intelligence Upgrade (In Progress)
+
+**Branch:** `v2-data-intelligence` | **Safety tag:** `v2-before-chunk-1`
+
+Chunk 1 (Foundation) completed — adds:
+- LLM config fields in `config.py` (11 new settings: `llm_provider`, `llm_base_url`, `llm_api_key`, tier models, timeout, retries, batch size, circuit breaker threshold, process interval)
+- V2 fields on existing models: `Article` (cleaned_content, quality_score, quality_tag, summary, needs_llm_matching), `DataSource` (trust_level), `KeywordMention` (match_method, match_reason)
+- New models: `TrendReport`, `KeywordCorrelation`, `Alert` in `models/`
+- `services/llm_service.py` — LLMService with tiered model routing (tier1/2/3), retry with backoff, circuit breaker, tier degradation. Factory `create_llm_service()` and module-level `llm_service` singleton.
+- Alembic migration infrastructure (`backend/alembic/`) configured for async SQLite with `render_as_batch=True`
+- Shared test fixtures in `tests/conftest.py`
+
+Remaining: Chunk 2 (data cleaning pipeline), Chunk 3 (semantic matching + LLM job), Chunk 4 (deep analysis), Chunk 5 (API + frontend), Chunk 6 (integration tests).
+
 ## Test Setup
 
-pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 25 backend tests; no frontend tests.
+pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 39 backend tests (25 original + 14 V2); no frontend tests.
