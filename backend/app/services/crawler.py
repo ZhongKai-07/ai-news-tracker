@@ -12,6 +12,8 @@ from app.services.rss_parser import parse_rss_feed
 from app.services.web_scraper import scrape_web_page
 from app.services.keyword_matcher import match_keywords_in_article
 from app.services.trend_calculator import calculate_daily_score
+from app.services.content_cleaner import clean_html, complete_data, extract_summary
+from app.services.quality_scorer import calculate_quality_score
 from app.config import settings
 
 from app.database import async_session
@@ -137,19 +139,55 @@ class CrawlerService:
         if existing.scalar_one_or_none():
             return
 
+        # Phase 1: Data cleaning pipeline (all rule-based, no LLM)
+        cleaned_content = clean_html(article_data.get("content"))
+        article_data = complete_data(article_data)
+        quality_score = calculate_quality_score(
+            title=article_data["title"],
+            content=cleaned_content or article_data.get("content"),
+            url=article_data["url"],
+            trust_level=getattr(source, "trust_level", None) or "low",
+        )
+        summary = extract_summary(cleaned_content) if cleaned_content else ""
+
+        # Determine quality tag
+        if quality_score >= 60:
+            quality_tag = "passed"
+        elif quality_score >= 30:
+            quality_tag = "pending_review"
+        else:
+            quality_tag = "filtered"
+
         article = Article(
             source_id=source.id,
             title=article_data["title"],
             url=article_data["url"],
             content=article_data.get("content"),
+            cleaned_content=cleaned_content or None,
+            quality_score=quality_score,
+            quality_tag=quality_tag,
+            summary=summary or None,
             published_at=article_data.get("published_at"),
+            needs_llm_matching=(quality_tag == "pending_review"),
         )
         db.add(article)
         await db.flush()
 
+        # Skip keyword matching for filtered/pending_review articles
+        if quality_tag != "passed":
+            return
+
+        # Rule-based keyword matching on passed articles
         matches = match_keywords_in_article(
-            title=article.title, content=article.content, keywords=keywords,
+            title=article.title, content=article.cleaned_content or article.content, keywords=keywords,
         )
+
+        has_title_hit = any(m["match_location"] == "title" for m in matches)
+        has_content_only = any(m["match_location"] == "content" for m in matches)
+
+        # If no title strong hit, mark for LLM semantic matching
+        if not has_title_hit:
+            article.needs_llm_matching = True
 
         for match in matches:
             mention = KeywordMention(
@@ -157,6 +195,7 @@ class CrawlerService:
                 article_id=article.id,
                 match_location=match["match_location"],
                 context_snippet=match.get("context_snippet"),
+                match_method="rule",
             )
             db.add(mention)
 
