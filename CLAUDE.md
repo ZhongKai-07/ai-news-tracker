@@ -99,7 +99,7 @@ npx tsc --noEmit  # Type check only
 
 ## V2 Data Intelligence Upgrade (In Progress)
 
-**Branch:** `v2-data-intelligence` | **Safety tag:** `v2-before-chunk-1`
+**Branch:** `v2-data-intelligence` | **Safety tags:** `v2-before-chunk-1`, `v2-before-chunk-2`
 
 Chunk 1 (Foundation) completed — adds:
 - LLM config fields in `config.py` (11 new settings: `llm_provider`, `llm_base_url`, `llm_api_key`, tier models, timeout, retries, batch size, circuit breaker threshold, process interval)
@@ -109,8 +109,18 @@ Chunk 1 (Foundation) completed — adds:
 - Alembic migration infrastructure (`backend/alembic/`) configured for async SQLite with `render_as_batch=True`
 - Shared test fixtures in `tests/conftest.py`
 
-Remaining: Chunk 2 (data cleaning pipeline), Chunk 3 (semantic matching + LLM job), Chunk 4 (deep analysis), Chunk 5 (API + frontend), Chunk 6 (integration tests).
+Chunk 2 (Data Cleaning Pipeline) completed — adds:
+- `services/content_cleaner.py` — `clean_html()` (BeautifulSoup HTML sanitization: removes script/style/nav/footer/aside/iframe/form + ad divs, extracts article/main content), `complete_data()` (title/published_at fallbacks), `extract_summary()` (extractive summary with Chinese/English sentence splitting)
+- `services/quality_scorer.py` — `calculate_quality_score()` multi-signal rule-based scoring: trust_level base + content completeness + URL/title spam detection, clamped to 0-100, three-tier quality_tag (passed ≥60 / pending_review 30-59 / filtered <30)
+- Crawler `_process_article` integrated with cleaning pipeline: HTML sanitize → data complete → quality score → summary extract → quality-gated keyword matching. Filtered articles skip matching; pending_review articles marked `needs_llm_matching=True`; passed articles do rule matching with `match_method="rule"`, content-only hits also marked for LLM
+
+Remaining: Chunk 3 (semantic matching + LLM job), Chunk 4 (deep analysis), Chunk 5 (API + frontend), Chunk 6 (integration tests).
+
+## Dev reference specification and implementation plans
+- specs: `ai-news-tracker\docs\superpowers\specs\2026-03-30-v2-data-intelligence-design.md`
+- implementation plans: `ai-news-tracker\docs\superpowers\plans\2026-03-30-v2-data-intelligence.md`
+- dev log: `ai-news-tracker\docs\dev-log\2026-03-30-v2-execution-strategy.md`
 
 ## Test Setup
 
-pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 39 backend tests (25 original + 14 V2); no frontend tests.
+pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 65 backend tests (25 original + 14 V2 Chunk1 + 26 Chunk2); no frontend tests.

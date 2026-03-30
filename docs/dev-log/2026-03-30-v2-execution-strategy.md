@@ -92,7 +92,7 @@ git tag v2-before-chunk-2
 | Chunk | 状态 | 开始日期 | 完成日期 | 备注 |
 |-------|------|----------|----------|------|
 | 1 | ✅ 已完成 | 2026-03-30 | 2026-03-30 | 6 commits, 39 tests pass, 使用并行 Agent 执行 |
-| 2 | 待开始 | | | |
+| 2 | ✅ 已完成 | 2026-03-31 | 2026-03-31 | 3 commits, 65 tests pass, content_cleaner + quality_scorer + crawler integration |
 | 3 | 待开始 | | | |
 | 4 | 待开始 | | | |
 | 5 | 待开始 | | | |
