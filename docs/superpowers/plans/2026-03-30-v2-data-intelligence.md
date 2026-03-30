@@ -107,9 +107,10 @@ from app.models.data_source import DataSource  # noqa: F401
 from app.models.keyword import Keyword  # noqa: F401
 from app.models.keyword_mention import KeywordMention  # noqa: F401
 from app.models.trend_snapshot import TrendSnapshot  # noqa: F401
-from app.models.trend_report import TrendReport  # noqa: F401
-from app.models.keyword_correlation import KeywordCorrelation  # noqa: F401
-from app.models.alert import Alert  # noqa: F401
+# Note: Add these imports after Task 3 creates the new model files:
+# from app.models.trend_report import TrendReport  # noqa: F401
+# from app.models.keyword_correlation import KeywordCorrelation  # noqa: F401
+# from app.models.alert import Alert  # noqa: F401
 
 @pytest_asyncio.fixture
 async def db_engine():
