@@ -177,9 +177,11 @@ DataSource 表新增 `trust_level` 字段：
 
 ### 3.1 文章摘要生成（零 LLM 成本）
 
-提取式摘要：取 `cleaned_content` 的前 1-2 个完整句子（不超过 100 字）。
-技术文章的首段通常就是核心观点，效果够用。
-存入 Article 表新增的 `summary` 字段。
+提取式摘要，基于 `cleaned_content`：
+- 跳过短行（< 20 字，通常是署名、日期、图片说明）
+- 取第一个符合长度的完整句子（20-200 字）
+- 如果找不到合适句子，取前 100 字并截断到最后一个句号
+- 存入 Article 表新增的 `summary` 字段
 
 ### 3.2 趋势解读报告
 
@@ -371,6 +373,172 @@ llm_tier3_model = "qwen-max"
 |------|------|------|
 | Trust Level 设置 | 表格新增"可信度"列，下拉切换 high/medium/low | 表格内 |
 | 质量统计 | 每个源显示通过率 | 表格内 |
+
+---
+
+## 爬取管道集成方案
+
+### 修改后的爬取流程
+
+当前 `_process_article` 在 `crawler.py` 中逐篇处理（创建文章 → 关键词匹配 → 趋势快照更新），全部在单个 per-source session 内完成。新管道需要分两阶段：
+
+**阶段一：同步处理（在现有 `_crawl_source` 内）**
+
+```
+对每篇文章：
+  1. URL 去重检查（现有逻辑）
+  2. HTML 净化（规则，毫秒级）
+  3. 数据补全（规则，毫秒级）
+  4. 多信号质量评分（规则，毫秒级）
+  5. 提取式摘要生成（规则，毫秒级）
+  6. 创建 Article 记录，写入 cleaned_content, quality_score, summary
+  7. quality_score ≥ 60 → 规则快筛关键词匹配
+     - 标题强命中 → 直接创建 KeywordMention (match_method="rule") + 更新 TrendSnapshot
+     - 弱命中/未命中 → 标记 article 为 needs_llm_matching=True
+  8. quality_score 30-59 → 标记 quality_tag="pending_review"
+  9. quality_score < 30 → 标记 quality_tag="filtered"，跳过匹配
+```
+
+阶段一全是规则操作，不增加任何延迟。保留现有的 per-source session 架构。
+
+**阶段二：异步批量后处理（爬取全部完成后触发）**
+
+```
+post_crawl_process():
+  1. 查询所有 quality_tag="pending_review" 的文章
+     → 批量打包（每 20 篇）→ Tier 1 LLM 质量复核
+     → 通过的更新为 quality_tag="passed"，标记 needs_llm_matching=True
+     → 拒绝的更新为 quality_tag="filtered"
+
+  2. 查询所有 needs_llm_matching=True 的文章
+     → 批量打包（每 20 篇）+ 活跃关键词列表 → Tier 2 LLM 语义匹配
+     → 创建 KeywordMention (match_method="llm"/"llm_uncertain")
+     → 更新对应 TrendSnapshot
+     → 更新 needs_llm_matching=False
+
+  3. 运行热点预警检查（规则触发 + Tier 1 原因分析）
+  4. 生成每日趋势解读（Tier 2，如果是当日最后一次爬取）
+```
+
+阶段二作为独立的后台任务，使用自己的 DB session，不阻塞爬取流程。通过 `needs_llm_matching` 标记实现阶段一到阶段二的数据传递。
+
+**关键词数量优化**：当活跃关键词 > 30 个时，LLM prompt 中仅发送尚未被规则强命中的关键词（即排除已在阶段一匹配到的），减少 prompt 长度。
+
+---
+
+## 数据迁移策略
+
+使用 Alembic 进行数据库迁移。
+
+### 现有数据处理
+
+| 表 | 新字段 | 现有数据处理 |
+|----|--------|-------------|
+| Article | `cleaned_content` | 设为 NULL，后续可运行一次性脚本回填 |
+| Article | `quality_score` | 设为 NULL（表示未评分） |
+| Article | `quality_tag` | 默认 `passed`（现有文章视为已通过） |
+| Article | `summary` | 设为 NULL，后续可批量生成 |
+| Article | `needs_llm_matching` | 默认 False（现有匹配结果保留） |
+| DataSource | `trust_level` | 默认 `medium`（现有源视为中等可信） |
+| KeywordMention | `match_method` | 默认 `rule`（现有匹配均为规则匹配） |
+| KeywordMention | `match_reason` | 设为 NULL |
+
+### 向后兼容
+
+- 语义匹配在 `cleaned_content` 为 NULL 时回退使用 `content`
+- 质量评分在 `quality_score` 为 NULL 时跳过过滤
+- 前端在 `summary` 为 NULL 时不显示摘要区域
+
+---
+
+## 标题相似度算法
+
+用于质量评分信号 3 中的重复检测。
+
+**算法**：基于 token 的 Jaccard 相似度
+- 将标题分词（中文用字符级 bigram，英文用空格分词后小写化）
+- Jaccard = |A ∩ B| / |A ∪ B|
+- 阈值 > 0.9 判定为重复
+
+**性能优化**：
+- 仅与同一天内已入库的文章比较（按 `fetched_at` 日期过滤）
+- 先用标题长度差异快速预过滤（长度差 > 50% 的直接跳过）
+- 每次爬取的文章量有限（~200 篇），O(n²) 可接受
+
+---
+
+## LLM 失败处理
+
+### 重试与降级策略
+
+| 场景 | 处理 |
+|------|------|
+| 单次调用超时 | 超时阈值 30 秒，最多重试 2 次（间隔 2s, 5s） |
+| 重试仍失败 | Tier 2 降级到 Tier 1 重试 1 次 |
+| 降级仍失败 | 该批次文章标记为 `needs_llm_matching=True` 保留，等下次爬取后再处理 |
+| LLM 全面不可用 | 系统回退到纯规则模式：仅规则强命中入库，灰色地带文章暂存 |
+| LLM 恢复后 | 下次 `post_crawl_process` 自动拾取所有 `needs_llm_matching=True` 和 `pending_review` 的文章 |
+
+### 断路器
+
+- 连续 5 次 LLM 调用失败 → 开启断路器，后续调用直接跳过（不浪费时间等超时）
+- 每 10 分钟尝试一次探针调用，成功则关闭断路器
+- 断路器状态记录在内存中（随服务重启重置）
+
+---
+
+## 数据库约束补充
+
+### 新增唯一约束
+
+- **TrendReport**：`UniqueConstraint(keyword_id, report_date, period)` — 防止重复生成报告
+- **KeywordCorrelation**：`UniqueConstraint(keyword_id_a, keyword_id_b, period_start, period_end)` — 防止重复计算
+  - 约定 `keyword_id_a < keyword_id_b`，保证方向一致性
+
+### Alert 表补充字段
+
+- `analysis_status: String` — `pending` / `completed` / `failed`，跟踪 LLM 分析生成状态
+  - 规则触发时创建 Alert，`analysis_status=pending`
+  - LLM 生成成功后更新为 `completed`
+  - LLM 失败后标记为 `failed`，前端显示"分析生成中"或"分析失败"
+
+### quality_score 约束
+
+- 计算完成后 clamp 到 [0, 100]：`quality_score = max(0, min(100, raw_score))`
+
+### 新增索引
+
+| 表 | 索引 | 用途 |
+|----|------|------|
+| Article | `idx_article_quality_tag` on (quality_tag) | 快速查询 pending_review 文章 |
+| Article | `idx_article_needs_llm` on (needs_llm_matching) | 快速查询待 LLM 匹配文章 |
+| Alert | `idx_alert_unread` on (is_read, created_at) | 查询未读预警 |
+| TrendReport | `idx_report_keyword_date` on (keyword_id, report_date) | 查询特定关键词报告 |
+| KeywordCorrelation | `idx_corr_keyword` on (keyword_id_a, keyword_id_b) | 查询关键词关联 |
+
+---
+
+## LLM 配置项
+
+在 `.env` / `config.py` 中新增：
+
+```
+# LLM 服务配置
+LLM_PROVIDER=openai_compatible    # 统一用 OpenAI compatible API 格式
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=sk-xxx
+
+# 三级模型
+LLM_TIER1_MODEL=qwen-turbo
+LLM_TIER2_MODEL=qwen-plus
+LLM_TIER3_MODEL=qwen-max
+
+# 调用控制
+LLM_TIMEOUT_SECONDS=30
+LLM_MAX_RETRIES=2
+LLM_BATCH_SIZE=20
+LLM_CIRCUIT_BREAKER_THRESHOLD=5
+```
 
 ---
 
