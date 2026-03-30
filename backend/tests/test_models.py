@@ -31,3 +31,62 @@ async def test_article_url_unique(db_session):
     db_session.add(a2)
     with pytest.raises(Exception):
         await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_article_new_fields(db_session):
+    source = DataSource(name="test", type="rss", url="http://test.com")
+    db_session.add(source)
+    await db_session.flush()
+    article = Article(
+        source_id=source.id, title="Test Article", url="http://test.com/1",
+        cleaned_content="Clean text here", quality_score=75,
+        quality_tag="passed", summary="A test summary.", needs_llm_matching=False,
+    )
+    db_session.add(article)
+    await db_session.flush()
+    assert article.cleaned_content == "Clean text here"
+    assert article.quality_score == 75
+    assert article.quality_tag == "passed"
+    assert article.summary == "A test summary."
+    assert article.needs_llm_matching is False
+
+@pytest.mark.asyncio
+async def test_article_new_fields_defaults(db_session):
+    source = DataSource(name="test", type="rss", url="http://test.com")
+    db_session.add(source)
+    await db_session.flush()
+    article = Article(source_id=source.id, title="Test", url="http://test.com/2")
+    db_session.add(article)
+    await db_session.flush()
+    assert article.cleaned_content is None
+    assert article.quality_score is None
+    assert article.quality_tag == "passed"
+    assert article.summary is None
+    assert article.needs_llm_matching is False
+
+@pytest.mark.asyncio
+async def test_datasource_trust_level(db_session):
+    source = DataSource(name="test", type="rss", url="http://test.com")
+    db_session.add(source)
+    await db_session.flush()
+    assert source.trust_level == "low"
+
+@pytest.mark.asyncio
+async def test_keyword_mention_match_method(db_session):
+    source = DataSource(name="test", type="rss", url="http://test.com")
+    db_session.add(source)
+    await db_session.flush()
+    kw = Keyword(name="test_kw")
+    db_session.add(kw)
+    await db_session.flush()
+    article = Article(source_id=source.id, title="Test", url="http://test.com/3")
+    db_session.add(article)
+    await db_session.flush()
+    mention = KeywordMention(
+        keyword_id=kw.id, article_id=article.id,
+        match_location="title", match_method="llm", match_reason="Semantic match"
+    )
+    db_session.add(mention)
+    await db_session.flush()
+    assert mention.match_method == "llm"
+    assert mention.match_reason == "Semantic match"

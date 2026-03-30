@@ -11,5 +11,7 @@ class KeywordMention(Base):
     article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id"))
     match_location: Mapped[str] = mapped_column(String(20))
     context_snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    match_method: Mapped[str] = mapped_column(String(20), default="rule")
+    match_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     keyword = relationship("Keyword", back_populates="mentions")
     article = relationship("Article", back_populates="mentions")

@@ -22,4 +22,5 @@ class DataSource(Base):
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     proxy_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     custom_headers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trust_level: Mapped[str] = mapped_column(String(10), default="low")
     articles = relationship("Article", back_populates="source")

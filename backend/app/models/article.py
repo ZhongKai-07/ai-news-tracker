@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, DateTime, ForeignKey, Integer
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -14,5 +14,10 @@ class Article(Base):
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    cleaned_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    quality_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quality_tag: Mapped[str] = mapped_column(String(20), default="passed")
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    needs_llm_matching: Mapped[bool] = mapped_column(Boolean, default=False)
     source = relationship("DataSource", back_populates="articles")
     mentions = relationship("KeywordMention", back_populates="article")
