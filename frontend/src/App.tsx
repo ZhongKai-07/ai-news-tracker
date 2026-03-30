@@ -10,11 +10,14 @@ function App() {
     <BrowserRouter>
       <div className="app">
         <nav className="sidebar">
-          <h2>AI News Tracker</h2>
-          <NavLink to="/">Dashboard</NavLink>
-          <NavLink to="/trends">Trends</NavLink>
-          <NavLink to="/keywords">Keywords</NavLink>
-          <NavLink to="/sources">Sources</NavLink>
+          <div className="sidebar-brand">
+            <h2>AI News Tracker</h2>
+            <div className="subtitle">Tech Trend Intelligence</div>
+          </div>
+          <NavLink to="/"><span className="nav-icon">D</span> Dashboard</NavLink>
+          <NavLink to="/trends"><span className="nav-icon">T</span> Trends</NavLink>
+          <NavLink to="/keywords"><span className="nav-icon">K</span> Keywords</NavLink>
+          <NavLink to="/sources"><span className="nav-icon">S</span> Sources</NavLink>
         </nav>
         <main className="main-content">
           <Routes>

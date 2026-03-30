@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "http://localhost:8000/api",
+  baseURL: "http://localhost:8001/api",
 });
 
 export interface Keyword {
@@ -64,11 +64,21 @@ export const trendsApi = {
   weekly: () => api.get("/summary/weekly").then((r) => r.data),
 };
 
+export interface MentionItem {
+  id: number;
+  article_title: string;
+  article_url: string;
+  source_name: string;
+  match_location: string;
+  context_snippet: string | null;
+  published_at: string | null;
+}
+
 export const articlesApi = {
   list: (keyword_id?: number) =>
     api.get("/articles", { params: keyword_id ? { keyword_id } : {} }).then((r) => r.data),
   mentions: (keyword_id: number) =>
-    api.get(`/keywords/${keyword_id}/mentions`).then((r) => r.data),
+    api.get<MentionItem[]>(`/keywords/${keyword_id}/mentions`).then((r) => r.data),
 };
 
 export const crawlApi = {
