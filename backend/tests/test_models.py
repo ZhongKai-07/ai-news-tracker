@@ -1,22 +1,7 @@
 import pytest
-import pytest_asyncio
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.database import Base
 from app.models import DataSource, Article, Keyword, KeywordMention, TrendSnapshot
-
-@pytest_asyncio.fixture
-async def db_engine():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
-
-@pytest_asyncio.fixture
-async def db_session(db_engine):
-    async with async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)() as session:
-        yield session
 
 @pytest.mark.asyncio
 async def test_create_all_tables(db_engine):
