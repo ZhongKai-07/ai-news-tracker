@@ -96,7 +96,7 @@ DataSource 表新增 `trust_level` 字段：
 |------|---------|
 | URL 含 `/ad/`, `/sponsor/`, `/redirect/`, `/campaign/` | -30 |
 | title 含 "广告", "赞助", "sponsored", "AD" | -30 |
-| 与已有文章标题相似度 > 90%（同一天内） | -25 |
+| 与已有文章标题相似度 > 90%（同一天内，阶段二后台计算） | -25 |
 
 **三档判定**：
 
@@ -179,9 +179,11 @@ DataSource 表新增 `trust_level` 字段：
 
 提取式摘要，基于 `cleaned_content`：
 - 跳过短行（< 20 字，通常是署名、日期、图片说明）
+- 句子切分：中文按 `。！？` 分割；英文用保守正则 `(?<=[.!?])\s+(?=[A-Z])` 分割（避免 `e.g.`, `U.S.` 等缩写误切）
 - 取第一个符合长度的完整句子（20-200 字）
-- 如果找不到合适句子，取前 100 字并截断到最后一个句号
+- 如果找不到合适句子，取前 100 字并截断到最后一个标点
 - 存入 Article 表新增的 `summary` 字段
+- **质量预期**：够用级别，不追求完美。极少数清洗后仍混乱的文章，摘要可能不理想，可接受
 
 ### 3.2 趋势解读报告
 
@@ -402,10 +404,12 @@ llm_tier3_model = "qwen-max"
 
 阶段一全是规则操作，不增加任何延迟。保留现有的 per-source session 架构。
 
-**阶段二：异步批量后处理（爬取全部完成后触发）**
+**阶段二：独立定时 Job（与爬取完全解耦）**
+
+阶段二不再绑定在单次爬取的生命周期内，而是作为 APScheduler 的独立 Job 运行（建议间隔 10-15 分钟），从数据库中消费待处理的文章。这样彻底解耦爬取管道和 LLM 处理管道：爬取不等 LLM，LLM 不依赖爬取是否完成。
 
 ```
-post_crawl_process():
+llm_process_job()（APScheduler 独立 Job，每 10-15 分钟运行一次）:
   1. 查询所有 quality_tag="pending_review" 的文章
      → 批量打包（每 20 篇）→ Tier 1 LLM 质量复核
      → 通过的更新为 quality_tag="passed"，标记 needs_llm_matching=True
@@ -414,14 +418,16 @@ post_crawl_process():
   2. 查询所有 needs_llm_matching=True 的文章
      → 批量打包（每 20 篇）+ 活跃关键词列表 → Tier 2 LLM 语义匹配
      → 创建 KeywordMention (match_method="llm"/"llm_uncertain")
-     → 更新对应 TrendSnapshot
+     → 在同一事务内顺序更新对应 TrendSnapshot（见并发安全说明）
      → 更新 needs_llm_matching=False
 
   3. 运行热点预警检查（规则触发 + Tier 1 原因分析）
-  4. 生成每日趋势解读（Tier 2，如果是当日最后一次爬取）
+  4. 生成每日趋势解读（Tier 2，仅在当天首次有新匹配数据时生成）
 ```
 
-阶段二作为独立的后台任务，使用自己的 DB session，不阻塞爬取流程。通过 `needs_llm_matching` 标记实现阶段一到阶段二的数据传递。
+阶段二使用自己的 DB session，通过 `needs_llm_matching` 和 `quality_tag` 标记从数据库消费待处理文章。如果某次运行时无积压文章，Job 直接跳过。
+
+**TrendSnapshot 并发安全**：SQLite 是单写者模型，同一时刻只有一个事务能写入。阶段二的 TrendSnapshot 更新在同一事务内顺序执行（逐条处理同一关键词+日期的 snapshot），不存在并发写入 Lost Update 的风险。阶段一（爬取中的规则强命中）和阶段二（LLM 匹配结果）的写入在时间上天然错开（阶段二在爬取之后运行），不会冲突。
 
 **关键词数量优化**：当活跃关键词 > 30 个时，LLM prompt 中仅发送尚未被规则强命中的关键词（即排除已在阶段一匹配到的），减少 prompt 长度。
 
@@ -452,19 +458,20 @@ post_crawl_process():
 
 ---
 
-## 标题相似度算法
+## 标题相似度去重
 
-用于质量评分信号 3 中的重复检测。
+用于质量评分信号 3 中的重复检测。**在阶段二定时 Job 中后台执行，不在阶段一实时流程中运行**（当前已有 URL 唯一约束做绝对去重，标题相似度是补充性清洗）。
 
 **算法**：基于 token 的 Jaccard 相似度
 - 将标题分词（中文用字符级 bigram，英文用空格分词后小写化）
 - Jaccard = |A ∩ B| / |A ∪ B|
 - 阈值 > 0.9 判定为重复
 
-**性能优化**：
-- 仅与同一天内已入库的文章比较（按 `fetched_at` 日期过滤）
-- 先用标题长度差异快速预过滤（长度差 > 50% 的直接跳过）
-- 每次爬取的文章量有限（~200 篇），O(n²) 可接受
+**执行方式**：
+- 在 `llm_process_job` 的步骤 1 之前运行，作为阶段二的预处理
+- 仅对当天新入库且 `quality_tag != "filtered"` 的文章做两两比较
+- 重复文章中保留来源 `trust_level` 最高的，其余标记为 `quality_tag="filtered"`
+- 先用标题长度差异快速预过滤（长度差 > 50% 的直接跳过），减少实际比较次数
 
 ---
 
@@ -476,9 +483,9 @@ post_crawl_process():
 |------|------|
 | 单次调用超时 | 超时阈值 30 秒，最多重试 2 次（间隔 2s, 5s） |
 | 重试仍失败 | Tier 2 降级到 Tier 1 重试 1 次 |
-| 降级仍失败 | 该批次文章标记为 `needs_llm_matching=True` 保留，等下次爬取后再处理 |
+| 降级仍失败 | 该批次文章标记保留（`needs_llm_matching=True`），等下次 Job 运行时重试 |
 | LLM 全面不可用 | 系统回退到纯规则模式：仅规则强命中入库，灰色地带文章暂存 |
-| LLM 恢复后 | 下次 `post_crawl_process` 自动拾取所有 `needs_llm_matching=True` 和 `pending_review` 的文章 |
+| LLM 恢复后 | 下次 `llm_process_job` 运行时自动拾取所有积压的 `needs_llm_matching=True` 和 `pending_review` 文章 |
 
 ### 断路器
 
