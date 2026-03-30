@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -42,9 +43,11 @@ class SourceResponse(BaseModel):
     weight: float
     enabled: bool
     status: str
-    last_fetched_at: str | None = None
+    last_fetched_at: datetime | None = None
     last_error: str | None = None
     consecutive_failures: int
+    proxy_url: str | None = None
+    custom_headers: str | None = None
 
     class Config:
         from_attributes = True
@@ -60,8 +63,11 @@ async def create_source(data: SourceCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("", response_model=list[SourceResponse])
-async def list_sources(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(DataSource))
+async def list_sources(include_disabled: bool = False, db: AsyncSession = Depends(get_db)):
+    query = select(DataSource)
+    if not include_disabled:
+        query = query.where(DataSource.status != "disabled")
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -84,6 +90,8 @@ async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
-    await db.delete(source)
+    # Soft delete — disable instead of physical delete to preserve article history
+    source.enabled = False
+    source.status = "disabled"
     await db.commit()
     return {"status": "deleted", "id": source_id}

@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,8 @@ from app.services.web_scraper import scrape_web_page
 from app.services.keyword_matcher import match_keywords_in_article
 from app.services.trend_calculator import calculate_daily_score
 from app.config import settings
+
+from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +53,18 @@ class CrawlerService:
         sources = result.scalars().all()
 
         # Filter out sources in exponential backoff
+        now = datetime.now(timezone.utc)
         active_sources = []
         for source in sources:
             if source.consecutive_failures >= settings.failure_backoff_threshold:
                 if source.last_fetched_at:
-                    from datetime import timedelta
+                    # SQLite returns naive datetimes — make it aware for comparison
+                    last_fetched = source.last_fetched_at
+                    if last_fetched.tzinfo is None:
+                        last_fetched = last_fetched.replace(tzinfo=timezone.utc)
                     backoff_minutes = 60 * (2 ** (source.consecutive_failures - settings.failure_backoff_threshold))
-                    next_allowed = source.last_fetched_at + timedelta(minutes=backoff_minutes)
-                    if datetime.now(timezone.utc) < next_allowed:
+                    next_allowed = last_fetched + timedelta(minutes=backoff_minutes)
+                    if now < next_allowed:
                         logger.info(f"Skipping {source.name} (backoff until {next_allowed})")
                         continue
             active_sources.append(source)
@@ -69,46 +75,57 @@ class CrawlerService:
             for kw in kw_result.scalars().all()
         ]
 
-        tasks = [self._crawl_source(db, source, keywords) for source in active_sources]
+        tasks = [self._crawl_source(source.id, keywords) for source in active_sources]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _crawl_source(self, db, source, keywords):
+    async def _crawl_source(self, source_id, keywords):
         async with self._semaphore:
-            try:
-                if source.type == "rss":
-                    articles = await parse_rss_feed(
-                        source.url,
-                        proxy_url=source.proxy_url,
-                        custom_headers=json.loads(source.custom_headers) if source.custom_headers else None,
-                    )
-                elif source.type in ("web_scraper", "api"):
-                    config = json.loads(source.parser_config) if source.parser_config else {}
-                    articles = await scrape_web_page(
-                        source.url, config,
-                        proxy_url=source.proxy_url,
-                        custom_headers=json.loads(source.custom_headers) if source.custom_headers else None,
-                    )
-                else:
-                    logger.warning(f"Unknown source type: {source.type}")
+            async with async_session() as db:
+                source_result = await db.execute(select(DataSource).where(DataSource.id == source_id))
+                source = source_result.scalar_one_or_none()
+                if not source:
                     return
 
-                for article_data in articles:
-                    await self._process_article(db, source, article_data, keywords)
+                try:
+                    if source.type == "rss":
+                        articles = await parse_rss_feed(
+                            source.url,
+                            proxy_url=source.proxy_url,
+                            custom_headers=json.loads(source.custom_headers) if source.custom_headers else None,
+                        )
+                    elif source.type in ("web_scraper", "api"):
+                        config = json.loads(source.parser_config) if source.parser_config else {}
+                        articles = await scrape_web_page(
+                            source.url, config,
+                            proxy_url=source.proxy_url,
+                            custom_headers=json.loads(source.custom_headers) if source.custom_headers else None,
+                        )
+                    else:
+                        logger.warning(f"Unknown source type: {source.type}")
+                        return
 
-                source.consecutive_failures = 0
-                source.status = "normal"
-                source.last_fetched_at = datetime.now(timezone.utc)
-                source.last_error = None
-                await db.commit()
+                    for article_data in articles:
+                        await self._process_article(db, source, article_data, keywords)
 
-            except Exception as e:
-                logger.error(f"Error crawling {source.name}: {e}")
-                source.consecutive_failures += 1
-                source.last_error = str(e)[:500]
-                if source.consecutive_failures >= 3:
-                    source.status = "error"
-                source.last_fetched_at = datetime.now(timezone.utc)
-                await db.commit()
+                    source.consecutive_failures = 0
+                    source.status = "normal"
+                    source.last_fetched_at = datetime.now(timezone.utc)
+                    source.last_error = None
+                    await db.commit()
+
+                except Exception as e:
+                    logger.error(f"Error crawling {source.name}: {e}")
+                    await db.rollback()
+                    # Re-fetch source after rollback since the ORM object is stale
+                    source_result = await db.execute(select(DataSource).where(DataSource.id == source_id))
+                    source = source_result.scalar_one_or_none()
+                    if source:
+                        source.consecutive_failures += 1
+                        source.last_error = str(e)[:500]
+                        if source.consecutive_failures >= 3:
+                            source.status = "error"
+                        source.last_fetched_at = datetime.now(timezone.utc)
+                        await db.commit()
 
     async def _process_article(self, db, source, article_data, keywords):
         if not article_data.get("url"):
@@ -167,8 +184,6 @@ class CrawlerService:
                     mention_count=1,
                 )
                 db.add(snapshot)
-
-        await db.commit()
 
 
 crawler_service = CrawlerService()

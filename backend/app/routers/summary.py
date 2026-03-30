@@ -35,7 +35,7 @@ async def weekly_summary(db: AsyncSession = Depends(get_db)):
             select(KeywordMention, Article)
             .join(Article, KeywordMention.article_id == Article.id)
             .where(KeywordMention.keyword_id == kw.id)
-            .order_by(Article.published_at.desc())
+            .order_by(Article.fetched_at.desc())
             .limit(3)
         )
         top_articles = [

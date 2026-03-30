@@ -10,7 +10,7 @@ from app.services.trend_calculator import detect_trend_direction
 
 router = APIRouter(prefix="/api/trends", tags=["trends"])
 
-PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90}
+PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "120d": 120}
 
 
 def _get_date_range(period, start_date, end_date):
@@ -36,7 +36,11 @@ async def get_trends(
         ids = [int(x) for x in keyword_ids.split(",")]
         query = query.where(TrendSnapshot.keyword_id.in_(ids))
     result = await db.execute(query.order_by(TrendSnapshot.date))
-    return result.scalars().all()
+    snaps = result.scalars().all()
+    return [
+        {"keyword_id": s.keyword_id, "date": str(s.date), "score": s.score, "mention_count": s.mention_count}
+        for s in snaps
+    ]
 
 
 @router.get("/heatmap")

@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Article, KeywordMention
+from app.models import Article, KeywordMention, DataSource
 
 router = APIRouter(prefix="/api", tags=["articles"])
 
@@ -15,7 +15,7 @@ async def list_articles(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Article).order_by(Article.published_at.desc())
+    query = select(Article).order_by(Article.fetched_at.desc())
     if keyword_id:
         query = (
             query.join(KeywordMention, KeywordMention.article_id == Article.id)
@@ -37,13 +37,14 @@ async def list_keyword_mentions(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(KeywordMention, Article)
+        select(KeywordMention, Article, DataSource)
         .join(Article, KeywordMention.article_id == Article.id)
+        .join(DataSource, Article.source_id == DataSource.id)
         .where(KeywordMention.keyword_id == keyword_id)
-        .order_by(Article.published_at.desc())
+        .order_by(Article.fetched_at.desc())
         .limit(limit)
     )
     return [
-        {"id": mention.id, "article_title": article.title, "article_url": article.url, "match_location": mention.match_location, "context_snippet": mention.context_snippet, "published_at": str(article.published_at) if article.published_at else None}
-        for mention, article in result.all()
+        {"id": mention.id, "article_title": article.title, "article_url": article.url, "source_name": source.name, "match_location": mention.match_location, "context_snippet": mention.context_snippet, "published_at": str(article.published_at) if article.published_at else None}
+        for mention, article, source in result.all()
     ]
