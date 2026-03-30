@@ -1,7 +1,11 @@
 import pytest
+from datetime import date
 from sqlalchemy import inspect
 from app.database import Base
 from app.models import DataSource, Article, Keyword, KeywordMention, TrendSnapshot
+from app.models.trend_report import TrendReport
+from app.models.keyword_correlation import KeywordCorrelation
+from app.models.alert import Alert
 
 @pytest.mark.asyncio
 async def test_create_all_tables(db_engine):
@@ -90,3 +94,46 @@ async def test_keyword_mention_match_method(db_session):
     await db_session.flush()
     assert mention.match_method == "llm"
     assert mention.match_reason == "Semantic match"
+
+@pytest.mark.asyncio
+async def test_trend_report_creation(db_session):
+    kw = Keyword(name="test_report_kw")
+    db_session.add(kw)
+    await db_session.flush()
+    report = TrendReport(
+        keyword_id=kw.id, report_date=date.today(), period="daily",
+        summary="Test summary", key_drivers=["driver1"], outlook="Rising"
+    )
+    db_session.add(report)
+    await db_session.flush()
+    assert report.id is not None
+    assert report.period == "daily"
+
+@pytest.mark.asyncio
+async def test_keyword_correlation_creation(db_session):
+    kw1 = Keyword(name="kw_corr_a")
+    kw2 = Keyword(name="kw_corr_b")
+    db_session.add_all([kw1, kw2])
+    await db_session.flush()
+    corr = KeywordCorrelation(
+        keyword_id_a=min(kw1.id, kw2.id), keyword_id_b=max(kw1.id, kw2.id),
+        co_occurrence_count=10, period_start=date.today(), period_end=date.today()
+    )
+    db_session.add(corr)
+    await db_session.flush()
+    assert corr.id is not None
+
+@pytest.mark.asyncio
+async def test_alert_creation(db_session):
+    kw = Keyword(name="alert_kw")
+    db_session.add(kw)
+    await db_session.flush()
+    alert = Alert(
+        keyword_id=kw.id, alert_type="spike",
+        trigger_value=15.0, baseline_value=5.0, analysis_status="pending"
+    )
+    db_session.add(alert)
+    await db_session.flush()
+    assert alert.id is not None
+    assert alert.is_read is False
+    assert alert.analysis_status == "pending"
