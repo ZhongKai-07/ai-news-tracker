@@ -269,6 +269,7 @@ llm_tier3_model = "qwen-max"
 - `quality_score: Integer` — 质量分数（0-100）
 - `quality_tag: String` — `passed` / `filtered` / `pending_review`
 - `summary: String` — 提取式摘要
+- `needs_llm_matching: Boolean` — 是否需要 LLM 语义匹配（阶段二处理标记），默认 False
 
 **DataSource 表新增字段**：
 - `trust_level: String` — `high` / `medium` / `low`，默认 `low`
