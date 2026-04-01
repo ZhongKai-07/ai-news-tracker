@@ -114,7 +114,14 @@ Chunk 2 (Data Cleaning Pipeline) completed — adds:
 - `services/quality_scorer.py` — `calculate_quality_score()` multi-signal rule-based scoring: trust_level base + content completeness + URL/title spam detection, clamped to 0-100, three-tier quality_tag (passed ≥60 / pending_review 30-59 / filtered <30)
 - Crawler `_process_article` integrated with cleaning pipeline: HTML sanitize → data complete → quality score → summary extract → quality-gated keyword matching. Filtered articles skip matching; pending_review articles marked `needs_llm_matching=True`; passed articles do rule matching with `match_method="rule"`, content-only hits also marked for LLM
 
-Remaining: Chunk 3 (semantic matching + LLM job), Chunk 4 (deep analysis), Chunk 5 (API + frontend), Chunk 6 (integration tests).
+Chunk 3 (Semantic Matching + LLM Job) completed — adds:
+- `services/semantic_matcher.py` — `classify_rule_matches()` splits matches into strong (title) and weak (content-only). `SemanticMatcher` class does hybrid rule + LLM matching: strong hits skip LLM, weak/miss articles batched for Tier 2 LLM semantic matching. Falls back to rule matches if LLM fails.
+- `services/title_dedup.py` — `jaccard_similarity()` with Chinese bigram / English word tokenization. `find_duplicates()` flags lower-trust duplicates when Jaccard ≥ 0.9, with length pre-filter.
+- `services/llm_process_job.py` — `run_llm_process()` independent APScheduler job (every 10min): title dedup → Tier 1 quality review of pending_review articles → Tier 2 semantic matching for needs_llm_matching articles. Creates KeywordMentions and updates TrendSnapshots.
+- `scheduler.py` updated to register `llm_process` job with `max_instances=1`
+- `main.py` imports V2 models (TrendReport, KeywordCorrelation, Alert) for table creation
+
+Remaining: Chunk 4 (deep analysis), Chunk 5 (API + frontend), Chunk 6 (integration tests).
 
 ## Dev reference specification and implementation plans
 - specs: `ai-news-tracker\docs\superpowers\specs\2026-03-30-v2-data-intelligence-design.md`
@@ -123,4 +130,4 @@ Remaining: Chunk 3 (semantic matching + LLM job), Chunk 4 (deep analysis), Chunk
 
 ## Test Setup
 
-pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 65 backend tests (25 original + 14 V2 Chunk1 + 26 Chunk2); no frontend tests.
+pytest with `asyncio_mode = auto` in `backend/pytest.ini`. Tests use in-memory SQLite. Currently 93 backend tests (25 original + 14 Chunk1 + 26 Chunk2 + 28 Chunk3); no frontend tests.

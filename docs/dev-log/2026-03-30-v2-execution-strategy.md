@@ -93,7 +93,7 @@ git tag v2-before-chunk-2
 |-------|------|----------|----------|------|
 | 1 | ✅ 已完成 | 2026-03-30 | 2026-03-30 | 6 commits, 39 tests pass, 使用并行 Agent 执行 |
 | 2 | ✅ 已完成 | 2026-03-31 | 2026-03-31 | 3 commits, 65 tests pass, content_cleaner + quality_scorer + crawler integration |
-| 3 | 待开始 | | | |
+| 3 | ✅ 已完成 | 2026-04-02 | 2026-04-02 | 3 commits, 93 tests (92 pass, 1 pre-existing env-dependent), semantic_matcher + title_dedup + llm_process_job |
 | 4 | 待开始 | | | |
 | 5 | 待开始 | | | |
 | 6 | 待开始 | | | |
