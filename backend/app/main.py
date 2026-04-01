@@ -3,6 +3,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app.scheduler import setup_scheduler, scheduler
+# Import V2 models so Base.metadata.create_all creates their tables
+from app.models.trend_report import TrendReport  # noqa: F401
+from app.models.keyword_correlation import KeywordCorrelation  # noqa: F401
+from app.models.alert import Alert  # noqa: F401
 
 
 @asynccontextmanager
